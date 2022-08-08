@@ -1,155 +1,142 @@
+
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.10;
 
-/// multiple owners for a wallet
-///submit a transaction by one owner
-///approve and revoke approval of pending transcations by others
-///anyone can execute a transcation after enough owners has approved it.
+contract MultiSigWallet {
+    event Deposit(address indexed sender, uint amount);
+    event Submit(uint indexed txId);
+    event Approve(address owner, uint indexed txId);
+    event Revoke(address indexed owner, uint indexed txId);
+    event Execute(uint indexed txId);
 
-contract MultiSigWallet{
-    event Deposit(address indexed sender , uint amount, uint balance ) ;
-    event Submit(
-        address indexed owner,
-        uint indexed txIndex,
-        address indexed to ,
-        uint value ,
-        bytes data   
-        ) ;
-    event Confirm(address indexed owner , uint indexed txIndex) ;
-    event Revoke(address indexed owner , uint indexed txIndex) ; 
-    event Execute(address indexed owner , uint indexed txIndex) ;
-
-    struct Transaction{
+    // Structure of transaction
+    struct Transaction {
         address to;
-        uint value ;
-        bytes data ;
-        bool executed ;
-        uint numConfirmations ;
+        uint value;
+        bytes data;
+        bool executed;
     }
 
-    address[] public owners ;
-    mapping(address => bool) public isOwner ;
-    uint public required ;
+    // Storing owners
+    address[] public owners;
+    // Checking owners
+    mapping(address => bool) public isOwner;
+    // no. approvels required for txn to execute
+    uint public required;
+    // Storing those transactions
+    Transaction[] public transactions;
+    // Storing approvel of each txn from each owners
+    mapping(uint => mapping(address => bool)) public approved;
 
-    Transaction[] public transactions ;
+    // Owners
+    modifier onlyOwner() {
+        require(isOwner[msg.sender], "not owner");
+        _;
+    }
 
-    // mapping from tx index => owner => bool
-    mapping(uint => mapping(address => bool)) public isConfirmed ;
+    // Checking the txns
+    modifier txExists(uint _txId) {
+        require(_txId < transactions.length, "tx does not exist");
+        _;
+    }
 
+    // Checking the approval was already done
+    modifier notApproved(uint _txId) {
+        require(!approved[_txId][msg.sender], "tx already approved");
+        _;
+    }
 
-    constructor(address[] memory _owners , uint _required){
-        require(_owners.length>0,"Owners required");
-        require(_required > 0 && _required <= _owners.length,"Invalid required owners");
+    // Checking whether the txn is already executed
+    modifier notExecuted(uint _txId) {
+        require(!transactions[_txId].executed, "tx already executed");
+        _;
+    }
 
-        for(uint i ; i< _owners.length ; i++ ){
-            address owner = _owners[i] ;
-            require(owner != address(0),"invalid owner") ;
-            require(!isOwner[owner], "owner is not unique") ;
+    constructor(address[] memory _owners, uint _required) {
+        require(_owners.length > 0, "owners required");
+        require(_required > 0 && _required <= _owners.length,
+        "invalid required number of owners"
+        );
 
-            isOwner[owner] =true ;
+        // Stating _owners to state variable owner
+        for (uint i; i < _owners.length; i++) {
+            address owner = _owners[i];
+            
+            require(owner != address(0), "invalid owner");
+            // Checking for duplicate owners
+            require( !isOwner[owner], "owner is not unique");
+
+            isOwner[owner] = true;
             owners.push(owner);
         }
 
-        required = _required ;
+        required = _required;
 
     }
 
-    receive() external payable{
-        emit Deposit(msg.sender, msg.value , address(this).balance);
+    receive() external payable {
+        emit Deposit(msg.sender, msg.value);
     }
 
-    modifier onlyOwner() {
-        require(isOwner[msg.sender],"not owner");
-        _;
-    }
-
-    modifier txExists(uint _txIndex){
-        require(_txIndex < transactions.length , "tx does not exist");
-        _;
-    }
-
-    modifier notExecuted(uint _txIndex){
-        require(!transactions[_txIndex].executed ,"tx already executed ") ;
-        _;
-
-    }
-
-    modifier notConfirmed(uint _txIndex){
-        require(!isConfirmed[_txIndex][msg.sender],"tx already confirmed");
-        _;
-    }
-
-
-
-
-    function submitTransaction(
-        address _to,
-        uint _value,
-        bytes memory _data
-    ) public onlyOwner{
-        uint txIndex = transactions.length ;
-        
-        transactions.push(
-            Transaction({
+    // Function to submit transactions for approval
+    function submit( address _to, uint _value, bytes calldata _data)
+        external
+        onlyOwner
+        {
+            transactions.push(Transaction({
                 to: _to,
                 value: _value,
                 data: _data,
-                executed: false,
-                numConfirmations: 0  
-            })
-        );
-
-        emit Submit(msg.sender , txIndex , _to , _value ,_data) ;
-    }
-
-    function confirmTransaction(uint _txIndex) public onlyOwner txExists(_txIndex) notConfirmed(_txIndex) notExecuted(_txIndex){
-          Transaction storage transaction = transactions[_txIndex];
-          transaction.numConfirmations +=1 ;
-          isConfirmed[_txIndex][msg.sender] = true ;
-
-          emit Confirm(msg.sender, _txIndex) ;
-    }
-
-    function executeTransaction(uint _txIndex) public onlyOwner txExists(_txIndex) notExecuted(_txIndex){
-         Transaction storage transaction = transactions[_txIndex];
-
-         require(transaction.numConfirmations >= required,"Cannot Execute") ;
-         transaction.executed = true;
-
-         emit Execute(msg.sender , _txIndex) ;
-
-    }
-
-    function revokeConfirmation(uint _txIndex) public onlyOwner txExists(_txIndex) notExecuted(_txIndex){
-        Transaction storage transaction = transactions[_txIndex];
-
-        require(isConfirmed[_txIndex][msg.sender],"tx not confirmed") ;
-
-        transaction.numConfirmations -= 1;
-        isConfirmed[_txIndex][msg.sender] = false ;
-
-        emit Revoke(msg.sender , _txIndex) ;
-    }
-
-    function getOwners() public view returns(address[] memory) {
-        return owners ;
-    }
-
-    function getTransaction(uint _txIndex) public view returns(
-        address to ,
-        uint value ,
-        bytes memory data ,
-        bool executed ,
-        uint numConfirmations ){
-            Transaction storage transaction = transactions[_txIndex];
-
-            return(
-                transaction.to,
-                transaction.value,
-                transaction.data,
-                transaction.executed,
-                transaction.numConfirmations
-            );
+                executed: false
+            }));
+            emit Submit(transactions.length - 1);
         }
 
+    // Function for each approval
+    function approve(uint _txId)
+        external
+        onlyOwner
+        txExists(_txId)
+        notApproved(_txId)
+        notExecuted(_txId)
+        {
+            approved[_txId][msg.sender] = true;
+            emit Approve(msg.sender, _txId);
+        }
+
+    // Counting the number of approvals
+    function _getApprovalCount(uint _txId) private view returns (uint count) {
+        for (uint i; i < owners.length; i++) {
+            if (approved[_txId][owners[i]]) {
+                count += 1;
+            }        
+        }
+    }
+
+    // Function to execute transaction
+    function execute(uint _txId) external txExists(_txId) notExecuted(_txId) {
+        require(_getApprovalCount(_txId) >= required, "approvals count < required count");
+        Transaction storage transaction = transactions[_txId];
+
+        transaction.executed = true;
+
+        (bool success, ) = transaction.to.call{value: transaction.value}(
+            transaction.data
+        );
+        require(success, "tx failed");
+
+        emit Execute(_txId);
+    }
+
+    // Function to revoke the txn
+    function revoke(uint _txId) 
+        external 
+        onlyOwner
+        txExists(_txId)
+        notExecuted(_txId)
+    {
+        require(approved[_txId][msg.sender], "tx not approved");
+        approved[_txId][msg.sender] = false;
+        emit Revoke(msg.sender, _txId);
+    }
 }
